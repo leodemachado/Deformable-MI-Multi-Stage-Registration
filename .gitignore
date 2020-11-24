@@ -3,3 +3,7 @@ debug/*
 
 # ignore CMake volatile files
 CMakeLists.txt.user
+
+# Ignore some data files
+data/out.nrrd
+data/DisplacementField.nrrd

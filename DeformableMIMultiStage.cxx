@@ -234,6 +234,9 @@ int main(int argc, char * argv[])
   rregistration->SetFixedImage(fixedImage);
   rregistration->SetMovingImage(movingImage);
 
+
+  std::cout<<"Registration and Metric Initialized!"<<std::endl;
+
   // Defining Composit Transform Object
   // It will stack all the transforms obtainned during the registration;
   //
@@ -277,6 +280,8 @@ int main(int argc, char * argv[])
   rregistration->SetInitialTransform(rinitialTransform);
   rregistration->InPlaceOn();
 
+  std::cout<<"Transform Initialized!"<<std::endl;
+
   // Composit Transform
   //
   compositeTransform->AddTransform(rinitialTransform);
@@ -306,13 +311,15 @@ int main(int argc, char * argv[])
   RigidCommandOptimizerType::Pointer commandOptimizer = RigidCommandOptimizerType::New();
   roptimizer->AddObserver(itk::IterationEvent(), commandOptimizer);
 
+  std::cout<<"Optimizer Initialized!"<<std::endl;
+
   // Setting multiresolution step for rigid stage
   //
   constexpr unsigned int rnumberOfLevels = 1;
 
   RRegistrationType::ShrinkFactorsArrayType rshrinkFactorsPerLevel;
   rshrinkFactorsPerLevel.SetSize( rnumberOfLevels );
-  rshrinkFactorsPerLevel[0] = 1;
+  rshrinkFactorsPerLevel[0] = 3;
   //rshrinkFactorsPerLevel[1] = 2;
   //rshrinkFactorsPerLevel[2] = 1;
 
@@ -326,9 +333,9 @@ int main(int argc, char * argv[])
   rregistration->SetShrinkFactorsPerLevel( rshrinkFactorsPerLevel );
   rregistration->SetSmoothingSigmasPerLevel( rsmoothingSigmasPerLevel );
 
-  using RigidCommandRegistrationType = RegistrationInterfaceCommand<RRegistrationType>;
-  RigidCommandRegistrationType::Pointer commandMultiStage = RigidCommandRegistrationType::New();
-  rregistration->AddObserver(itk::MultiResolutionIterationEvent(), commandMultiStage);
+  //using RigidCommandRegistrationType = RegistrationInterfaceCommand<RRegistrationType>;
+  //RigidCommandRegistrationType::Pointer commandMultiStage = RigidCommandRegistrationType::New();
+  //rregistration->AddObserver(itk::MultiResolutionIterationEvent(), commandMultiStage);
 
   // Now, let's run the rigid stage
   try {
@@ -345,31 +352,43 @@ int main(int argc, char * argv[])
   // Add the final rigid transform into the composit transform stack
   compositeTransform->AddTransform(rregistration->GetModifiableTransform());
 
+  // Resampling the new rigid-registered image.
+
+  using ResampleFilterType = itk::ResampleImageFilter<MovingImageType, FixedImageType>;
+  ResampleFilterType::Pointer resample = ResampleFilterType::New();
+
+  resample->SetTransform(compositeTransform);
+  resample->SetInput(movingImage);
+  resample->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
+  resample->SetOutputOrigin(fixedImage->GetOrigin());
+  resample->SetOutputSpacing(fixedImage->GetSpacing());
+  resample->SetOutputDirection(fixedImage->GetDirection());
+
+  // This value is set to zero in order to make easier to perform
+  // regression testing in this example. However, for didactic
+  // exercise it will be better to set it to a medium gray value
+  // such as 100 or 128.
+  resample->SetDefaultPixelValue(0);
+  resample->Update();
+
+
+  std::cout<<"Moving image resampled with Rigid Transform!"<<std::endl;
+
+  // this object will be the new moving image for the deformable stage
+  MovingImageType::Pointer resampledMovingImage = resample->GetOutput();
+
   // ////////////////// Second stage: Deformable
+  //  
+  std::cout<<"Deformable stage initialized!"<<std::endl;
 
-  //  Software Guide : BeginLatex
-  //
-  //  We instantiate now the type of the \code{BSplineTransform} using
-  //  as template parameters the type for coordinates representation, the
-  //  dimension of the space, and the order of the BSpline.
-  //
-  //  \index{BSplineTransform!New}
-  //  \index{BSplineTransform!Instantiation}
-  //
-  //  Software Guide : EndLatex
-
-  // Software Guide : BeginCodeSnippet
   const unsigned int     SpaceDimension = ImageDimension;
   constexpr unsigned int SplineOrder = 3;
   using CoordinateRepType = double;
 
   using DTransformType =
     itk::BSplineTransform<CoordinateRepType, SpaceDimension, SplineOrder>;
-  // Software Guide : EndCodeSnippet
-
 
   using DOptimizerType = itk::LBFGSBOptimizerv4;
-
 
   using DRegistrationType =
     itk::ImageRegistrationMethodv4<FixedImageType, MovingImageType>;
@@ -377,26 +396,17 @@ int main(int argc, char * argv[])
   DOptimizerType::Pointer    doptimizer = DOptimizerType::New();
   DRegistrationType::Pointer dregistration = DRegistrationType::New();
 
-
   dregistration->SetMetric(metric);
   dregistration->SetOptimizer(doptimizer);
-
   dregistration->SetFixedImage(fixedImage);
-  dregistration->SetMovingImage(movingImage);
+  dregistration->SetMovingImage(resampledMovingImage);
 
   //  Software Guide : BeginLatex
   //
   //  The transform object is constructed, initialized like previous example
   //  and passed to the registration method.
-  //
-  //  \index{itk::ImageRegistrationMethodv4!SetInitialTransform()}
-  //  \index{itk::ImageRegistrationMethodv4!InPlaceOn()}
-  //
-  //  Software Guide : EndLatex
 
-  // Software Guide : BeginCodeSnippet
   DTransformType::Pointer dtransform = DTransformType::New();
-  // Software Guide : EndCodeSnippet
 
   // Initialize the transform
   unsigned int numberOfGridNodesInOneDimension = 5;
@@ -406,8 +416,6 @@ int main(int argc, char * argv[])
     numberOfGridNodesInOneDimension = std::stoi(argv[8]);
   }
 
-  /*
-  */
   using InitializerType =
     itk::BSplineTransformInitializer<DTransformType, FixedImageType>;
 
@@ -423,23 +431,19 @@ int main(int argc, char * argv[])
 
   // Set transform to identity
   dtransform->SetIdentity();
-  //dtransform->SetBulkTransform(compositeTransform);
 
-  compositeTransform->AddTransform(dtransform);
-  compositeTransform->SetOnlyMostRecentTransformToOptimizeOn();
+  // dtransform->SetBulkTransform(compositeTransform);
+  // compositeTransform->AddTransform(dtransform);
+  // compositeTransform->SetOnlyMostRecentTransformToOptimizeOn();
 
+  dregistration->SetInitialTransform(dtransform);
+  dregistration->InPlaceOn();
 
-  // Software Guide : BeginCodeSnippet
-  dregistration->SetInitialTransform(compositeTransform);
-  //dregistration->SetMovingInitialTransform(compositeTransform);
-  //dregistration->SetIni (dtransform);
-  // dregistration->InPlaceOn();
-  // Software Guide : EndCodeSnippet
-
+  std::cout<<"DTransform Initialized!"<<std::endl;
 
   //  Next we set the parameters of the LBFGSB Optimizer.
   //
-  const unsigned int                numParameters = dtransform->GetNumberOfParameters();
+  const unsigned long                numParameters = dtransform->GetNumberOfParameters();
   DOptimizerType::BoundSelectionType boundSelect(numParameters);
   DOptimizerType::BoundValueType     upperBound(numParameters);
   DOptimizerType::BoundValueType     lowerBound(numParameters);
@@ -462,12 +466,12 @@ int main(int argc, char * argv[])
   // Create the Command observer and register it with the optimizer.
   //
   using DeformableCommandIterationUpdate = CommandIterationUpdate<DRegistrationType>;
-  DeformableCommandIterationUpdate::Pointer dcommand1 = DeformableCommandIterationUpdate::New();
-  doptimizer->AddObserver(itk::IterationEvent(), dcommand1);
+  DeformableCommandIterationUpdate::Pointer deformableOptimizer = DeformableCommandIterationUpdate::New();
+  doptimizer->AddObserver(itk::IterationEvent(), deformableOptimizer);
 
+  std::cout<<"DOptimizer Initialized!"<<std::endl;
   //  A single level registration process is run using
   //  the shrink factor 3 and smoothing sigma 2,1,0.
-  /*
   constexpr unsigned int dnumberOfLevels = 3;
 
   DRegistrationType::ShrinkFactorsArrayType dshrinkFactorsPerLevel;
@@ -485,6 +489,7 @@ int main(int argc, char * argv[])
   dregistration->SetNumberOfLevels(dnumberOfLevels);
   dregistration->SetSmoothingSigmasPerLevel(dsmoothingSigmasPerLevel);
   dregistration->SetShrinkFactorsPerLevel(dshrinkFactorsPerLevel);
+  /*
 
   // Create and set the transform adaptors for each level of this multi resolution scheme.
   //
@@ -554,26 +559,27 @@ int main(int argc, char * argv[])
     return EXIT_FAILURE;
   }
 
-  compositeTransform->AddTransform(dregistration->GetModifiableTransform());
-
   // Report the time and memory taken by the registration
   chronometer.Report(std::cout);
   memorymeter.Report(std::cout);
 
   DOptimizerType::ParametersType finalParameters = dtransform->GetParameters();
 
+  std::cout<<"Deformable stage concluded!"<<std::endl;
   std::cout << "Last Transform Parameters" << std::endl;
   std::cout << finalParameters << std::endl;
 
+  compositeTransform->AddTransform(dregistration->GetModifiableTransform());
+
   // Finally we use the last transform in order to resample the image.
   //
+
+  std::cout<<"Resampling final moving image!"<<std::endl;
+
   using ResampleFilterType = itk::ResampleImageFilter<MovingImageType, FixedImageType>;
 
-  ResampleFilterType::Pointer resample = ResampleFilterType::New();
-
   resample->SetTransform(compositeTransform);
-  resample->SetInput(movingImageReader->GetOutput());
-
+  resample->SetInput(movingImage);
   resample->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
   resample->SetOutputOrigin(fixedImage->GetOrigin());
   resample->SetOutputSpacing(fixedImage->GetSpacing());
@@ -583,7 +589,7 @@ int main(int argc, char * argv[])
   // regression testing in this example. However, for didactic
   // exercise it will be better to set it to a medium gray value
   // such as 100 or 128.
-  resample->SetDefaultPixelValue(100);
+  resample->SetDefaultPixelValue(0);
 
   using OutputPixelType = signed short;
 
@@ -614,6 +620,7 @@ int main(int argc, char * argv[])
     return EXIT_FAILURE;
   }
 
+  /*
   using DifferenceFilterType =
     itk::SquaredDifferenceImageFilter<FixedImageType, FixedImageType, OutputImageType>;
 
@@ -661,11 +668,15 @@ int main(int argc, char * argv[])
       return EXIT_FAILURE;
     }
   }
+*/
 
   // Generate the explicit deformation field resulting from
   // the registration.
-  if (argc > 6)
-  {
+  //if (argc > 6)
+  //{
+
+  std::cout<<"Saving Deformation Vector Field!"<<std::endl;
+
     using VectorPixelType = itk::Vector<float, ImageDimension>;
     using DisplacementFieldImageType = itk::Image<VectorPixelType, ImageDimension>;
 
@@ -678,7 +689,7 @@ int main(int argc, char * argv[])
       DisplacementFieldGeneratorType::New();
     dispfieldGenerator->UseReferenceImageOn();
     dispfieldGenerator->SetReferenceImage(fixedImage);
-    dispfieldGenerator->SetTransform(dtransform);
+    dispfieldGenerator->SetTransform(compositeTransform);
     try
     {
       dispfieldGenerator->Update();
@@ -695,7 +706,7 @@ int main(int argc, char * argv[])
 
     fieldWriter->SetInput(dispfieldGenerator->GetOutput());
 
-    fieldWriter->SetFileName(argv[6]);
+    fieldWriter->SetFileName("DisplacementField.nrrd");
     try
     {
       fieldWriter->Update();
@@ -706,7 +717,7 @@ int main(int argc, char * argv[])
       std::cerr << excp << std::endl;
       return EXIT_FAILURE;
     }
-  }
+  //}
 
   // Optionally, save the transform parameters in a file
   if (argc > 7)
@@ -719,3 +730,4 @@ int main(int argc, char * argv[])
 
   return EXIT_SUCCESS;
 }
+
