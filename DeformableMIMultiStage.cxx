@@ -162,7 +162,7 @@ public:
     }
     std::cout << optimizer->GetCurrentIteration() << "   ";
     std::cout << optimizer->GetCurrentMetricValue() << "   ";
-    std::cout << optimizer->GetCurrentPosition() << "   "<< std::endl
+    std::cout << optimizer->GetCurrentPosition() << "   "<< std::endl;
     // std::cout << optimizer->GetInfinityNormOfProjectedGradient() << std::endl;
   }
 };
@@ -509,7 +509,6 @@ int main(int argc, char * argv[])
   dregistration->SetNumberOfLevels(dnumberOfLevels);
   dregistration->SetSmoothingSigmasPerLevel(dsmoothingSigmasPerLevel);
   dregistration->SetShrinkFactorsPerLevel(dshrinkFactorsPerLevel);
-  /*
 
   // Create and set the transform adaptors for each level of this multi resolution scheme.
   //
@@ -702,7 +701,7 @@ int main(int argc, char * argv[])
       itk::TransformToDisplacementFieldFilter<DisplacementFieldImageType,
                                               CoordinateRepType>;
 
-    /** Create an setup displacement field generator.
+    // Create an setup displacement field generator.
     DisplacementFieldGeneratorType::Pointer dispfieldGenerator =
       DisplacementFieldGeneratorType::New();
     dispfieldGenerator->UseReferenceImageOn();
