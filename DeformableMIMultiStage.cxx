@@ -161,7 +161,8 @@ public:
       return;
     }
     std::cout << optimizer->GetCurrentIteration() << "   ";
-    std::cout << optimizer->GetCurrentMetricValue() << "   "<< std::endl;
+    std::cout << optimizer->GetCurrentMetricValue() << "   ";
+    std::cout << optimizer->GetCurrentPosition() << "   "<< std::endl
     // std::cout << optimizer->GetInfinityNormOfProjectedGradient() << std::endl;
   }
 };
@@ -207,6 +208,21 @@ int main(int argc, char * argv[])
   // All the objects belonging this stage
   // have names starting with R
 
+  using ResampleFilterType = itk::ResampleImageFilter<MovingImageType, FixedImageType>;
+  ResampleFilterType::Pointer resample = ResampleFilterType::New();
+
+  using OutputPixelType = signed short;
+
+  using OutputImageType = itk::Image<OutputPixelType, ImageDimension>;
+
+  using CastFilterType = itk::CastImageFilter<FixedImageType, OutputImageType>;
+
+  using WriterType = itk::ImageFileWriter<OutputImageType>;
+
+
+  WriterType::Pointer     writer = WriterType::New();
+  CastFilterType::Pointer caster = CastFilterType::New();
+
   // Defining object types
   //
   using RTransformType = itk::VersorRigid3DTransform<double>;
@@ -219,15 +235,14 @@ int main(int argc, char * argv[])
     itk::MattesMutualInformationImageToImageMetricv4<FixedImageType, MovingImageType>;
 
 
-  RRegistrationType::Pointer rregistration = RRegistrationType::New();
-  ROptimizerType::Pointer roptimizer = ROptimizerType::New();
   MetricType::Pointer  metric = MetricType::New();
-
-
   metric->SetNumberOfHistogramBins(50);
   metric->SetUseMovingImageGradientFilter(false);
   metric->SetUseFixedImageGradientFilter(false);
   metric->SetUseSampledPointSet(false);
+
+  RRegistrationType::Pointer rregistration = RRegistrationType::New();
+  ROptimizerType::Pointer roptimizer = ROptimizerType::New();
 
   rregistration->SetOptimizer(roptimizer);
   rregistration->SetMetric(metric);
@@ -278,13 +293,14 @@ int main(int argc, char * argv[])
   // Initial transform initialized;
   //
   rregistration->SetInitialTransform(rinitialTransform);
-  rregistration->InPlaceOn();
-
-  std::cout<<"Transform Initialized!"<<std::endl;
+  //rregistration->InPlaceOn();
 
   // Composit Transform
   //
   compositeTransform->AddTransform(rinitialTransform);
+
+  std::cout<<"Transform Initialized!"<<std::endl;
+
 
   // Setting Optimizer Scales and Parameters
   //
@@ -300,10 +316,17 @@ int main(int argc, char * argv[])
 
   roptimizer->SetScales(roptimizerScales);
 
+  /*
   roptimizer->SetLearningRate(16);
   roptimizer->SetMinimumStepLength(1.5);
   roptimizer->SetNumberOfIterations(200);
   roptimizer->SetRelaxationFactor(0.5);
+  */
+
+  roptimizer->SetLearningRate( 0.1 );
+  roptimizer->SetMinimumStepLength( 0.001 );
+  roptimizer->SetNumberOfIterations( 200 );
+  roptimizer->ReturnBestParametersAndValueOn();
 
   // Setting optimizer observer for the rigid stage
   //
@@ -315,19 +338,19 @@ int main(int argc, char * argv[])
 
   // Setting multiresolution step for rigid stage
   //
-  constexpr unsigned int rnumberOfLevels = 1;
+  constexpr unsigned int rnumberOfLevels = 3;
 
   RRegistrationType::ShrinkFactorsArrayType rshrinkFactorsPerLevel;
   rshrinkFactorsPerLevel.SetSize( rnumberOfLevels );
   rshrinkFactorsPerLevel[0] = 3;
-  //rshrinkFactorsPerLevel[1] = 2;
-  //rshrinkFactorsPerLevel[2] = 1;
+  rshrinkFactorsPerLevel[1] = 2;
+  rshrinkFactorsPerLevel[2] = 1;
 
   RRegistrationType::SmoothingSigmasArrayType rsmoothingSigmasPerLevel;
-  rsmoothingSigmasPerLevel.SetSize( 1 );
+  rsmoothingSigmasPerLevel.SetSize( rnumberOfLevels );
   rsmoothingSigmasPerLevel[0] = 1;
-  //rsmoothingSigmasPerLevel[1] = 2;
-  //rsmoothingSigmasPerLevel[2] = 3;
+  rsmoothingSigmasPerLevel[1] = 2;
+  rsmoothingSigmasPerLevel[2] = 3;
 
   rregistration->SetNumberOfLevels( rnumberOfLevels );
   rregistration->SetShrinkFactorsPerLevel( rshrinkFactorsPerLevel );
@@ -352,10 +375,6 @@ int main(int argc, char * argv[])
   // Add the final rigid transform into the composit transform stack
   compositeTransform->AddTransform(rregistration->GetModifiableTransform());
 
-  // Resampling the new rigid-registered image.
-
-  using ResampleFilterType = itk::ResampleImageFilter<MovingImageType, FixedImageType>;
-  ResampleFilterType::Pointer resample = ResampleFilterType::New();
 
   resample->SetTransform(compositeTransform);
   resample->SetInput(movingImage);
@@ -371,11 +390,12 @@ int main(int argc, char * argv[])
   resample->SetDefaultPixelValue(0);
   resample->Update();
 
-
   std::cout<<"Moving image resampled with Rigid Transform!"<<std::endl;
 
+  /*
   // this object will be the new moving image for the deformable stage
   MovingImageType::Pointer resampledMovingImage = resample->GetOutput();
+
 
   // ////////////////// Second stage: Deformable
   //  
@@ -399,7 +419,7 @@ int main(int argc, char * argv[])
   dregistration->SetMetric(metric);
   dregistration->SetOptimizer(doptimizer);
   dregistration->SetFixedImage(fixedImage);
-  dregistration->SetMovingImage(resampledMovingImage);
+  dregistration->SetMovingImage(movingImage);
 
   //  Software Guide : BeginLatex
   //
@@ -472,19 +492,19 @@ int main(int argc, char * argv[])
   std::cout<<"DOptimizer Initialized!"<<std::endl;
   //  A single level registration process is run using
   //  the shrink factor 3 and smoothing sigma 2,1,0.
-  constexpr unsigned int dnumberOfLevels = 3;
+  constexpr unsigned int dnumberOfLevels = 1;
 
   DRegistrationType::ShrinkFactorsArrayType dshrinkFactorsPerLevel;
   dshrinkFactorsPerLevel.SetSize(dnumberOfLevels);
-  dshrinkFactorsPerLevel[0] = 3;
-  dshrinkFactorsPerLevel[0] = 2;
   dshrinkFactorsPerLevel[0] = 1;
+  //dshrinkFactorsPerLevel[0] = 2;
+  //dshrinkFactorsPerLevel[0] = 1;
 
   DRegistrationType::SmoothingSigmasArrayType dsmoothingSigmasPerLevel;
   dsmoothingSigmasPerLevel.SetSize(dnumberOfLevels);
-  dsmoothingSigmasPerLevel[0] = 2;
   dsmoothingSigmasPerLevel[0] = 1;
-  dsmoothingSigmasPerLevel[0] = 0;
+  //dsmoothingSigmasPerLevel[0] = 1;
+  //dsmoothingSigmasPerLevel[0] = 0;
 
   dregistration->SetNumberOfLevels(dnumberOfLevels);
   dregistration->SetSmoothingSigmasPerLevel(dsmoothingSigmasPerLevel);
@@ -530,7 +550,32 @@ int main(int argc, char * argv[])
   }
 
   dregistration->SetTransformParametersAdaptorsPerLevel(adaptors);
+
+
+  // Saving rigidly-registered image
+
+  // Resampling the egistered image.
+
   */
+
+
+
+  writer->SetFileName(argv[3]);
+
+  caster->SetInput(resample->GetOutput());
+  writer->SetInput(caster->GetOutput());
+
+
+  try
+  {
+    writer->Update();
+  }
+  catch (itk::ExceptionObject & err)
+  {
+    std::cerr << "ExceptionObject caught !" << std::endl;
+    std::cerr << err << std::endl;
+    return EXIT_FAILURE;
+  }
 
   // Add time and memory probes
   itk::TimeProbesCollectorBase   chronometer;
@@ -538,6 +583,7 @@ int main(int argc, char * argv[])
 
   std::cout << std::endl << "Starting BSpline Stage" << std::endl;
 
+  /*
   try
   {
     memorymeter.Start("Registration");
@@ -569,7 +615,7 @@ int main(int argc, char * argv[])
   std::cout << "Last Transform Parameters" << std::endl;
   std::cout << finalParameters << std::endl;
 
-  compositeTransform->AddTransform(dregistration->GetModifiableTransform());
+  // compositeTransform->AddTransform(dregistration->GetModifiableTransform());
 
   // Finally we use the last transform in order to resample the image.
   //
@@ -578,7 +624,7 @@ int main(int argc, char * argv[])
 
   using ResampleFilterType = itk::ResampleImageFilter<MovingImageType, FixedImageType>;
 
-  resample->SetTransform(compositeTransform);
+  resample->SetTransform(dtransform);
   resample->SetInput(movingImage);
   resample->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
   resample->SetOutputOrigin(fixedImage->GetOrigin());
@@ -591,36 +637,8 @@ int main(int argc, char * argv[])
   // such as 100 or 128.
   resample->SetDefaultPixelValue(0);
 
-  using OutputPixelType = signed short;
-
-  using OutputImageType = itk::Image<OutputPixelType, ImageDimension>;
-
-  using CastFilterType = itk::CastImageFilter<FixedImageType, OutputImageType>;
-
-  using WriterType = itk::ImageFileWriter<OutputImageType>;
 
 
-  WriterType::Pointer     writer = WriterType::New();
-  CastFilterType::Pointer caster = CastFilterType::New();
-
-  writer->SetFileName(argv[3]);
-
-  caster->SetInput(resample->GetOutput());
-  writer->SetInput(caster->GetOutput());
-
-
-  try
-  {
-    writer->Update();
-  }
-  catch (itk::ExceptionObject & err)
-  {
-    std::cerr << "ExceptionObject caught !" << std::endl;
-    std::cerr << err << std::endl;
-    return EXIT_FAILURE;
-  }
-
-  /*
   using DifferenceFilterType =
     itk::SquaredDifferenceImageFilter<FixedImageType, FixedImageType, OutputImageType>;
 
@@ -668,7 +686,7 @@ int main(int argc, char * argv[])
       return EXIT_FAILURE;
     }
   }
-*/
+
 
   // Generate the explicit deformation field resulting from
   // the registration.
@@ -684,7 +702,7 @@ int main(int argc, char * argv[])
       itk::TransformToDisplacementFieldFilter<DisplacementFieldImageType,
                                               CoordinateRepType>;
 
-    /** Create an setup displacement field generator. */
+    /** Create an setup displacement field generator.
     DisplacementFieldGeneratorType::Pointer dispfieldGenerator =
       DisplacementFieldGeneratorType::New();
     dispfieldGenerator->UseReferenceImageOn();
@@ -727,6 +745,7 @@ int main(int argc, char * argv[])
     parametersFile << finalParameters << std::endl;
     parametersFile.close();
   }
+  */
 
   return EXIT_SUCCESS;
 }
