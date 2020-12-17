@@ -5,5 +5,5 @@ debug/*
 CMakeLists.txt.user
 
 # Ignore some data files
-data/out.nrrd
-data/DisplacementField.nrrd
+data/*
+##

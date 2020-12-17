@@ -48,6 +48,7 @@
 #include "itkBSplineDeformableTransform.h"
 
 #include "itkLBFGSBOptimizerv4.h"
+#include "itkLBFGS2Optimizerv4.h"
 #include "itkRegularStepGradientDescentOptimizerv4.h"
 #include "itkMattesMutualInformationImageToImageMetricv4.h"
 #include "itkMachadoMutualInformationImageToImageMetricv4.h"
@@ -161,8 +162,8 @@ public:
       return;
     }
     std::cout << optimizer->GetCurrentIteration() << "   ";
-    std::cout << optimizer->GetCurrentMetricValue() << "   ";
-    std::cout << optimizer->GetCurrentPosition() << "   "<< std::endl;
+    std::cout << optimizer->GetCurrentMetricValue() << "   "<< std::endl;
+    // std::cout << optimizer->GetCurrentPosition() << "   "<< std::endl;
     // std::cout << optimizer->GetInfinityNormOfProjectedGradient() << std::endl;
   }
 };
@@ -204,12 +205,7 @@ int main(int argc, char * argv[])
   MovingImageType::Pointer movingImage = movingImageReader->GetOutput();
   FixedImageType::ConstPointer fixedImage = fixedImageReader->GetOutput();
 
-  // ////////////////// First stage: Rigid
-  // All the objects belonging this stage
-  // have names starting with R
-
   using ResampleFilterType = itk::ResampleImageFilter<MovingImageType, FixedImageType>;
-  ResampleFilterType::Pointer resample = ResampleFilterType::New();
 
   using OutputPixelType = signed short;
 
@@ -220,26 +216,27 @@ int main(int argc, char * argv[])
   using WriterType = itk::ImageFileWriter<OutputImageType>;
 
 
-  WriterType::Pointer     writer = WriterType::New();
-  CastFilterType::Pointer caster = CastFilterType::New();
 
-  // Defining object types
+  // Rigid Stage......................................
   //
+  // All the objects belonging this stage
+  // have names starting with R/r
+  //
+  std::cout<< "Rigid stage starts!" << std::endl;
+
+  using MetricType =
+    itk::MattesMutualInformationImageToImageMetricv4<FixedImageType, MovingImageType>;
+  MetricType::Pointer  metric = MetricType::New();
+  metric->SetNumberOfHistogramBins(50);
+  metric->SetUseMovingImageGradientFilter(false);
+  metric->SetUseFixedImageGradientFilter(false);
+  metric->SetUseSampledPointSet(false);
   using RTransformType = itk::VersorRigid3DTransform<double>;
   using ROptimizerType = itk::RegularStepGradientDescentOptimizerv4<double>;
   using RRegistrationType = itk::ImageRegistrationMethodv4<
                                                   FixedImageType,
                                                   MovingImageType,
                                                   RTransformType>;
-  using MetricType =
-    itk::MattesMutualInformationImageToImageMetricv4<FixedImageType, MovingImageType>;
-
-
-  MetricType::Pointer  metric = MetricType::New();
-  metric->SetNumberOfHistogramBins(50);
-  metric->SetUseMovingImageGradientFilter(false);
-  metric->SetUseFixedImageGradientFilter(false);
-  metric->SetUseSampledPointSet(false);
 
   RRegistrationType::Pointer rregistration = RRegistrationType::New();
   ROptimizerType::Pointer roptimizer = ROptimizerType::New();
@@ -248,7 +245,6 @@ int main(int argc, char * argv[])
   rregistration->SetMetric(metric);
   rregistration->SetFixedImage(fixedImage);
   rregistration->SetMovingImage(movingImage);
-
 
   std::cout<<"Registration and Metric Initialized!"<<std::endl;
 
@@ -293,14 +289,13 @@ int main(int argc, char * argv[])
   // Initial transform initialized;
   //
   rregistration->SetInitialTransform(rinitialTransform);
-  //rregistration->InPlaceOn();
+  rregistration->InPlaceOn();
 
   // Composit Transform
   //
   compositeTransform->AddTransform(rinitialTransform);
 
   std::cout<<"Transform Initialized!"<<std::endl;
-
 
   // Setting Optimizer Scales and Parameters
   //
@@ -323,8 +318,8 @@ int main(int argc, char * argv[])
   roptimizer->SetRelaxationFactor(0.5);
   */
 
-  roptimizer->SetLearningRate( 0.1 );
-  roptimizer->SetMinimumStepLength( 0.001 );
+  roptimizer->SetLearningRate( 1 );
+  roptimizer->SetMinimumStepLength( 0.01 );
   roptimizer->SetNumberOfIterations( 200 );
   roptimizer->ReturnBestParametersAndValueOn();
 
@@ -356,9 +351,9 @@ int main(int argc, char * argv[])
   rregistration->SetShrinkFactorsPerLevel( rshrinkFactorsPerLevel );
   rregistration->SetSmoothingSigmasPerLevel( rsmoothingSigmasPerLevel );
 
-  //using RigidCommandRegistrationType = RegistrationInterfaceCommand<RRegistrationType>;
-  //RigidCommandRegistrationType::Pointer commandMultiStage = RigidCommandRegistrationType::New();
-  //rregistration->AddObserver(itk::MultiResolutionIterationEvent(), commandMultiStage);
+  using RigidCommandRegistrationType = RegistrationInterfaceCommand<RRegistrationType>;
+  RigidCommandRegistrationType::Pointer commandMultiStage = RigidCommandRegistrationType::New();
+  rregistration->AddObserver(itk::MultiResolutionIterationEvent(), commandMultiStage);
 
   // Now, let's run the rigid stage
   try {
@@ -375,6 +370,7 @@ int main(int argc, char * argv[])
   // Add the final rigid transform into the composit transform stack
   compositeTransform->AddTransform(rregistration->GetModifiableTransform());
 
+  ResampleFilterType::Pointer resample = ResampleFilterType::New();
 
   resample->SetTransform(compositeTransform);
   resample->SetInput(movingImage);
@@ -382,22 +378,14 @@ int main(int argc, char * argv[])
   resample->SetOutputOrigin(fixedImage->GetOrigin());
   resample->SetOutputSpacing(fixedImage->GetSpacing());
   resample->SetOutputDirection(fixedImage->GetDirection());
-
-  // This value is set to zero in order to make easier to perform
-  // regression testing in this example. However, for didactic
-  // exercise it will be better to set it to a medium gray value
-  // such as 100 or 128.
   resample->SetDefaultPixelValue(0);
   resample->Update();
 
-  std::cout<<"Moving image resampled with Rigid Transform!"<<std::endl;
 
-  /*
   // this object will be the new moving image for the deformable stage
   MovingImageType::Pointer resampledMovingImage = resample->GetOutput();
 
-
-  // ////////////////// Second stage: Deformable
+  // Second stage: Deformable......................................................
   //  
   std::cout<<"Deformable stage initialized!"<<std::endl;
 
@@ -408,7 +396,7 @@ int main(int argc, char * argv[])
   using DTransformType =
     itk::BSplineTransform<CoordinateRepType, SpaceDimension, SplineOrder>;
 
-  using DOptimizerType = itk::LBFGSBOptimizerv4;
+  using DOptimizerType = itk::LBFGS2Optimizerv4;
 
   using DRegistrationType =
     itk::ImageRegistrationMethodv4<FixedImageType, MovingImageType>;
@@ -416,19 +404,23 @@ int main(int argc, char * argv[])
   DOptimizerType::Pointer    doptimizer = DOptimizerType::New();
   DRegistrationType::Pointer dregistration = DRegistrationType::New();
 
-  dregistration->SetMetric(metric);
+  MetricType::Pointer dMetric = MetricType::New();
+  dMetric->SetNumberOfHistogramBins(50);
+  dMetric->SetUseMovingImageGradientFilter(false);
+  dMetric->SetUseFixedImageGradientFilter(false);
+  dMetric->SetUseSampledPointSet(false);
+
+  dregistration->SetMetric(dMetric);
   dregistration->SetOptimizer(doptimizer);
   dregistration->SetFixedImage(fixedImage);
-  dregistration->SetMovingImage(movingImage);
+  dregistration->SetMovingImage(resampledMovingImage);
 
-  //  Software Guide : BeginLatex
+  //  The transform object is constructed and passed to the registration method.
   //
-  //  The transform object is constructed, initialized like previous example
-  //  and passed to the registration method.
-
   DTransformType::Pointer dtransform = DTransformType::New();
 
   // Initialize the transform
+  //
   unsigned int numberOfGridNodesInOneDimension = 5;
 
   if (argc > 8)
@@ -450,65 +442,64 @@ int main(int argc, char * argv[])
   dtransformInitializer->InitializeTransform();
 
   // Set transform to identity
+  //
   dtransform->SetIdentity();
 
-  // dtransform->SetBulkTransform(compositeTransform);
-  // compositeTransform->AddTransform(dtransform);
-  // compositeTransform->SetOnlyMostRecentTransformToOptimizeOn();
+  compositeTransform->AddTransform(dtransform);
 
   dregistration->SetInitialTransform(dtransform);
   dregistration->InPlaceOn();
 
   std::cout<<"DTransform Initialized!"<<std::endl;
 
-  //  Next we set the parameters of the LBFGSB Optimizer.
+  //  Next we set the parameters of the LBFGS2 Optimizer.
   //
-  const unsigned long                numParameters = dtransform->GetNumberOfParameters();
-  DOptimizerType::BoundSelectionType boundSelect(numParameters);
-  DOptimizerType::BoundValueType     upperBound(numParameters);
-  DOptimizerType::BoundValueType     lowerBound(numParameters);
+  // Scale estimator
+  //
+  using ScalesEstimatorType =
+    itk::RegistrationParameterScalesFromPhysicalShift<MetricType>;
+  ScalesEstimatorType::Pointer scalesEstimator = ScalesEstimatorType::New();
+  scalesEstimator->SetMetric(dMetric);
+  scalesEstimator->SetTransformForward(true);
+  scalesEstimator->SetSmallParameterVariation(1.0);
 
-  boundSelect.Fill(DOptimizerType::UNBOUNDED);
-  upperBound.Fill(0.0);
-  lowerBound.Fill(0.0);
-
-  doptimizer->SetBoundSelection(boundSelect);
-  doptimizer->SetUpperBound(upperBound);
-  doptimizer->SetLowerBound(lowerBound);
-
-  doptimizer->SetCostFunctionConvergenceFactor(1.e7);
-  doptimizer->SetGradientConvergenceTolerance(1e-6);
-  doptimizer->SetNumberOfIterations(200);
-  doptimizer->SetMaximumNumberOfFunctionEvaluations(30);
-  doptimizer->SetMaximumNumberOfCorrections(5);
-  // Software Guide : EndCodeSnippet
+  // Set Optimizer
+  //
+  doptimizer->SetScalesEstimator(scalesEstimator);
+  doptimizer->SetSolutionAccuracy(1e-4);
+  doptimizer->SetHessianApproximationAccuracy(5);
+  doptimizer->SetMaximumIterations(100);
+  doptimizer->SetMaximumLineSearchEvaluations(10);
 
   // Create the Command observer and register it with the optimizer.
   //
-  using DeformableCommandIterationUpdate = CommandIterationUpdate<DRegistrationType>;
-  DeformableCommandIterationUpdate::Pointer deformableOptimizer = DeformableCommandIterationUpdate::New();
-  doptimizer->AddObserver(itk::IterationEvent(), deformableOptimizer);
+  using DeformableCommandIterationUpdate = CommandIterationUpdate<DOptimizerType>;
+  DeformableCommandIterationUpdate::Pointer deformableOptimizerObserver = DeformableCommandIterationUpdate::New();
+  doptimizer->AddObserver(itk::IterationEvent(), deformableOptimizerObserver);
 
-  std::cout<<"DOptimizer Initialized!"<<std::endl;
-  //  A single level registration process is run using
-  //  the shrink factor 3 and smoothing sigma 2,1,0.
-  constexpr unsigned int dnumberOfLevels = 1;
+  std::cout<<"Deformable Optimizer Initialized!"<<std::endl;
+
+  //  A Multi-level registration process is run using
+  //  the shrink factors 3,2,1 and smoothing sigma 2,1,0.
+  //
+  constexpr unsigned int dnumberOfLevels = 3;
 
   DRegistrationType::ShrinkFactorsArrayType dshrinkFactorsPerLevel;
   dshrinkFactorsPerLevel.SetSize(dnumberOfLevels);
-  dshrinkFactorsPerLevel[0] = 1;
-  //dshrinkFactorsPerLevel[0] = 2;
-  //dshrinkFactorsPerLevel[0] = 1;
+  dshrinkFactorsPerLevel[0] = 3;
+  dshrinkFactorsPerLevel[1] = 2;
+  dshrinkFactorsPerLevel[2] = 1;
 
   DRegistrationType::SmoothingSigmasArrayType dsmoothingSigmasPerLevel;
   dsmoothingSigmasPerLevel.SetSize(dnumberOfLevels);
-  dsmoothingSigmasPerLevel[0] = 1;
-  //dsmoothingSigmasPerLevel[0] = 1;
-  //dsmoothingSigmasPerLevel[0] = 0;
+  dsmoothingSigmasPerLevel[0] = 2;
+  dsmoothingSigmasPerLevel[1] = 1;
+  dsmoothingSigmasPerLevel[2] = 0;
 
   dregistration->SetNumberOfLevels(dnumberOfLevels);
   dregistration->SetSmoothingSigmasPerLevel(dsmoothingSigmasPerLevel);
   dregistration->SetShrinkFactorsPerLevel(dshrinkFactorsPerLevel);
+
 
   // Create and set the transform adaptors for each level of this multi resolution scheme.
   //
@@ -550,39 +541,15 @@ int main(int argc, char * argv[])
 
   dregistration->SetTransformParametersAdaptorsPerLevel(adaptors);
 
+  using DeformableCommandRegistrationType = RegistrationInterfaceCommand<DRegistrationType>;
+  DeformableCommandRegistrationType::Pointer commandMultiStageDeformable = DeformableCommandRegistrationType::New();
+  dregistration->AddObserver(itk::MultiResolutionIterationEvent(), commandMultiStageDeformable);
 
-  // Saving rigidly-registered image
+  std::cout << std::endl << "Starting BSpline Registration" << std::endl;
 
-  // Resampling the egistered image.
-
-  */
-
-
-
-  writer->SetFileName(argv[3]);
-
-  caster->SetInput(resample->GetOutput());
-  writer->SetInput(caster->GetOutput());
-
-
-  try
-  {
-    writer->Update();
-  }
-  catch (itk::ExceptionObject & err)
-  {
-    std::cerr << "ExceptionObject caught !" << std::endl;
-    std::cerr << err << std::endl;
-    return EXIT_FAILURE;
-  }
-
-  // Add time and memory probes
   itk::TimeProbesCollectorBase   chronometer;
   itk::MemoryProbesCollectorBase memorymeter;
 
-  std::cout << std::endl << "Starting BSpline Stage" << std::endl;
-
-  /*
   try
   {
     memorymeter.Start("Registration");
@@ -611,33 +578,73 @@ int main(int argc, char * argv[])
   DOptimizerType::ParametersType finalParameters = dtransform->GetParameters();
 
   std::cout<<"Deformable stage concluded!"<<std::endl;
-  std::cout << "Last Transform Parameters" << std::endl;
-  std::cout << finalParameters << std::endl;
+  //std::cout << "Last Transform Parameters" << std::endl;
+  //std::cout << finalParameters << std::endl;
 
-  // compositeTransform->AddTransform(dregistration->GetModifiableTransform());
-
-  // Finally we use the last transform in order to resample the image.
-  //
+  compositeTransform->AddTransform(dregistration->GetModifiableTransform());
 
   std::cout<<"Resampling final moving image!"<<std::endl;
 
-  using ResampleFilterType = itk::ResampleImageFilter<MovingImageType, FixedImageType>;
+  std::cout<<"Moving image resampled with Rigid Transform!"<<std::endl;
 
-  resample->SetTransform(dtransform);
-  resample->SetInput(movingImage);
-  resample->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
-  resample->SetOutputOrigin(fixedImage->GetOrigin());
-  resample->SetOutputSpacing(fixedImage->GetSpacing());
-  resample->SetOutputDirection(fixedImage->GetDirection());
+  WriterType::Pointer     writer = WriterType::New();
+  CastFilterType::Pointer caster = CastFilterType::New();
+  ResampleFilterType::Pointer resample2 = ResampleFilterType::New();
 
-  // This value is set to zero in order to make easier to perform
-  // regression testing in this example. However, for didactic
-  // exercise it will be better to set it to a medium gray value
-  // such as 100 or 128.
-  resample->SetDefaultPixelValue(0);
+  resample2->SetTransform(dtransform);
+  resample2->SetInput(resampledMovingImage);
+  resample2->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
+  resample2->SetOutputOrigin(fixedImage->GetOrigin());
+  resample2->SetOutputSpacing(fixedImage->GetSpacing());
+  resample2->SetOutputDirection(fixedImage->GetDirection());
+  resample2->SetDefaultPixelValue(0);
 
+  writer->SetFileName(argv[3]);
+  caster->SetInput(resample2->GetOutput());
+  writer->SetInput(caster->GetOutput());
 
+  try
+  {
+    writer->Update();
+  }
+  catch (itk::ExceptionObject & err)
+  {
+    std::cerr << "ExceptionObject caught !" << std::endl;
+    std::cerr << err << std::endl;
+    return EXIT_FAILURE;
+  }
 
+  // Resampling with Composit Transform:
+  //
+  WriterType::Pointer writer2 = WriterType::New();
+  CastFilterType::Pointer caster2 = CastFilterType::New();
+  ResampleFilterType::Pointer resample3 = ResampleFilterType::New();
+
+  resample3->SetTransform(compositeTransform);
+  resample3->SetInput(movingImage);
+  resample3->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
+  resample3->SetOutputOrigin(fixedImage->GetOrigin());
+  resample3->SetOutputSpacing(fixedImage->GetSpacing());
+  resample3->SetOutputDirection(fixedImage->GetDirection());
+  resample3->SetDefaultPixelValue(0);
+
+  writer2->SetFileName("composed-Resampled.nrrd");
+  caster2->SetInput(resample3->GetOutput());
+  writer2->SetInput(caster2->GetOutput());
+
+  try
+  {
+    writer2->Update();
+  }
+  catch (itk::ExceptionObject & err)
+  {
+    std::cerr << "ExceptionObject caught !" << std::endl;
+    std::cerr << err << std::endl;
+    return EXIT_FAILURE;
+  }
+
+  // Add time and memory probes
+  /*
   using DifferenceFilterType =
     itk::SquaredDifferenceImageFilter<FixedImageType, FixedImageType, OutputImageType>;
 
@@ -684,8 +691,9 @@ int main(int argc, char * argv[])
       std::cerr << err << std::endl;
       return EXIT_FAILURE;
     }
+  using ResampleFilterType = itk::ResampleImageFilter<MovingImageType, FixedImageType>;
   }
-
+  */
 
   // Generate the explicit deformation field resulting from
   // the registration.
@@ -723,7 +731,7 @@ int main(int argc, char * argv[])
 
     fieldWriter->SetInput(dispfieldGenerator->GetOutput());
 
-    fieldWriter->SetFileName("DisplacementField.nrrd");
+    fieldWriter->SetFileName("DisplacementField.h5");
     try
     {
       fieldWriter->Update();
@@ -734,7 +742,6 @@ int main(int argc, char * argv[])
       std::cerr << excp << std::endl;
       return EXIT_FAILURE;
     }
-  //}
 
   // Optionally, save the transform parameters in a file
   if (argc > 7)
@@ -744,7 +751,6 @@ int main(int argc, char * argv[])
     parametersFile << finalParameters << std::endl;
     parametersFile.close();
   }
-  */
 
   return EXIT_SUCCESS;
 }
