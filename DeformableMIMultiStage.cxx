@@ -231,6 +231,7 @@ int main(int argc, char * argv[])
   metric->SetUseMovingImageGradientFilter(false);
   metric->SetUseFixedImageGradientFilter(false);
   metric->SetUseSampledPointSet(false);
+
   using RTransformType = itk::VersorRigid3DTransform<double>;
   using ROptimizerType = itk::RegularStepGradientDescentOptimizerv4<double>;
   using RRegistrationType = itk::ImageRegistrationMethodv4<
@@ -319,7 +320,7 @@ int main(int argc, char * argv[])
   */
 
   roptimizer->SetLearningRate( 1 );
-  roptimizer->SetMinimumStepLength( 0.01 );
+  roptimizer->SetMinimumStepLength( 0.001 );
   roptimizer->SetNumberOfIterations( 200 );
   roptimizer->ReturnBestParametersAndValueOn();
 
@@ -370,20 +371,28 @@ int main(int argc, char * argv[])
   // Add the final rigid transform into the composit transform stack
   compositeTransform->AddTransform(rregistration->GetModifiableTransform());
 
-  ResampleFilterType::Pointer resample = ResampleFilterType::New();
+  WriterType::Pointer writerRigid = WriterType::New();
+  CastFilterType::Pointer casterRigid = CastFilterType::New();
+  ResampleFilterType::Pointer resampleRigid = ResampleFilterType::New();
 
-  resample->SetTransform(compositeTransform);
-  resample->SetInput(movingImage);
-  resample->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
-  resample->SetOutputOrigin(fixedImage->GetOrigin());
-  resample->SetOutputSpacing(fixedImage->GetSpacing());
-  resample->SetOutputDirection(fixedImage->GetDirection());
-  resample->SetDefaultPixelValue(0);
-  resample->Update();
+  resampleRigid->SetTransform(compositeTransform);
+  resampleRigid->SetInput(movingImage);
+  resampleRigid->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
+  resampleRigid->SetOutputOrigin(fixedImage->GetOrigin());
+  resampleRigid->SetOutputSpacing(fixedImage->GetSpacing());
+  resampleRigid->SetOutputDirection(fixedImage->GetDirection());
+  resampleRigid->SetDefaultPixelValue(0);
+  resampleRigid->Update();
 
+  casterRigid->SetInput(resampleRigid->GetOutput());
+  writerRigid->SetInput(casterRigid->GetOutput());
+  writerRigid->SetFileName("rigidStageOutput.nrrd");
+  writerRigid->Update();
+
+  std::cout<<"Rigid Stage output Image Saved!"<<std::endl;
 
   // this object will be the new moving image for the deformable stage
-  MovingImageType::Pointer resampledMovingImage = resample->GetOutput();
+  MovingImageType::Pointer resampledMovingImage = resampleRigid->GetOutput();
 
   // Second stage: Deformable......................................................
   //  
@@ -482,27 +491,26 @@ int main(int argc, char * argv[])
   //  A Multi-level registration process is run using
   //  the shrink factors 3,2,1 and smoothing sigma 2,1,0.
   //
-  constexpr unsigned int dnumberOfLevels = 3;
+  constexpr unsigned int dnumberOfLevels = 1;
 
   DRegistrationType::ShrinkFactorsArrayType dshrinkFactorsPerLevel;
   dshrinkFactorsPerLevel.SetSize(dnumberOfLevels);
-  dshrinkFactorsPerLevel[0] = 3;
-  dshrinkFactorsPerLevel[1] = 2;
-  dshrinkFactorsPerLevel[2] = 1;
+  dshrinkFactorsPerLevel[0] = 1;
+  //dshrinkFactorsPerLevel[1] = 2;
+  //dshrinkFactorsPerLevel[2] = 1;
 
   DRegistrationType::SmoothingSigmasArrayType dsmoothingSigmasPerLevel;
   dsmoothingSigmasPerLevel.SetSize(dnumberOfLevels);
-  dsmoothingSigmasPerLevel[0] = 2;
-  dsmoothingSigmasPerLevel[1] = 1;
-  dsmoothingSigmasPerLevel[2] = 0;
+  dsmoothingSigmasPerLevel[0] = 0;
+  //dsmoothingSigmasPerLevel[1] = 1;
+  //dsmoothingSigmasPerLevel[2] = 0;
 
   dregistration->SetNumberOfLevels(dnumberOfLevels);
   dregistration->SetSmoothingSigmasPerLevel(dsmoothingSigmasPerLevel);
   dregistration->SetShrinkFactorsPerLevel(dshrinkFactorsPerLevel);
 
-
   // Create and set the transform adaptors for each level of this multi resolution scheme.
-  //
+  /*
   DRegistrationType::TransformParametersAdaptorsContainerType adaptors;
   DTransformType::PhysicalDimensionsType fixedPhysicalDimensions;
   for (unsigned int i = 0; i< SpaceDimension; i++){
@@ -540,6 +548,7 @@ int main(int argc, char * argv[])
   }
 
   dregistration->SetTransformParametersAdaptorsPerLevel(adaptors);
+  */
 
   using DeformableCommandRegistrationType = RegistrationInterfaceCommand<DRegistrationType>;
   DeformableCommandRegistrationType::Pointer commandMultiStageDeformable = DeformableCommandRegistrationType::New();
@@ -578,34 +587,29 @@ int main(int argc, char * argv[])
   DOptimizerType::ParametersType finalParameters = dtransform->GetParameters();
 
   std::cout<<"Deformable stage concluded!"<<std::endl;
-  //std::cout << "Last Transform Parameters" << std::endl;
-  //std::cout << finalParameters << std::endl;
 
   compositeTransform->AddTransform(dregistration->GetModifiableTransform());
 
-  std::cout<<"Resampling final moving image!"<<std::endl;
 
-  std::cout<<"Moving image resampled with Rigid Transform!"<<std::endl;
+  WriterType::Pointer     writerDef = WriterType::New();
+  CastFilterType::Pointer casterDef = CastFilterType::New();
+  ResampleFilterType::Pointer resampleDef = ResampleFilterType::New();
 
-  WriterType::Pointer     writer = WriterType::New();
-  CastFilterType::Pointer caster = CastFilterType::New();
-  ResampleFilterType::Pointer resample2 = ResampleFilterType::New();
+  resampleDef->SetTransform(dtransform);
+  resampleDef->SetInput(resampledMovingImage);
+  resampleDef->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
+  resampleDef->SetOutputOrigin(fixedImage->GetOrigin());
+  resampleDef->SetOutputSpacing(fixedImage->GetSpacing());
+  resampleDef->SetOutputDirection(fixedImage->GetDirection());
+  resampleDef->SetDefaultPixelValue(0);
 
-  resample2->SetTransform(dtransform);
-  resample2->SetInput(resampledMovingImage);
-  resample2->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
-  resample2->SetOutputOrigin(fixedImage->GetOrigin());
-  resample2->SetOutputSpacing(fixedImage->GetSpacing());
-  resample2->SetOutputDirection(fixedImage->GetDirection());
-  resample2->SetDefaultPixelValue(0);
-
-  writer->SetFileName(argv[3]);
-  caster->SetInput(resample2->GetOutput());
-  writer->SetInput(caster->GetOutput());
+  writerDef->SetFileName("deformedStageOutput.nrrd");
+  casterDef->SetInput(resampleDef->GetOutput());
+  writerDef->SetInput(casterDef->GetOutput());
 
   try
   {
-    writer->Update();
+    writerDef->Update();
   }
   catch (itk::ExceptionObject & err)
   {
@@ -613,28 +617,29 @@ int main(int argc, char * argv[])
     std::cerr << err << std::endl;
     return EXIT_FAILURE;
   }
+  std::cout<<"Deformable Stage Image output resampled!"<<std::endl;
 
   // Resampling with Composit Transform:
   //
-  WriterType::Pointer writer2 = WriterType::New();
-  CastFilterType::Pointer caster2 = CastFilterType::New();
-  ResampleFilterType::Pointer resample3 = ResampleFilterType::New();
+  WriterType::Pointer writerDefComp = WriterType::New();
+  CastFilterType::Pointer casterDefComp = CastFilterType::New();
+  ResampleFilterType::Pointer resampleDefComp = ResampleFilterType::New();
 
-  resample3->SetTransform(compositeTransform);
-  resample3->SetInput(movingImage);
-  resample3->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
-  resample3->SetOutputOrigin(fixedImage->GetOrigin());
-  resample3->SetOutputSpacing(fixedImage->GetSpacing());
-  resample3->SetOutputDirection(fixedImage->GetDirection());
-  resample3->SetDefaultPixelValue(0);
+  resampleDefComp->SetTransform(compositeTransform);
+  resampleDefComp->SetInput(movingImage);
+  resampleDefComp->SetSize(fixedImage->GetLargestPossibleRegion().GetSize());
+  resampleDefComp->SetOutputOrigin(fixedImage->GetOrigin());
+  resampleDefComp->SetOutputSpacing(fixedImage->GetSpacing());
+  resampleDefComp->SetOutputDirection(fixedImage->GetDirection());
+  resampleDefComp->SetDefaultPixelValue(0);
 
-  writer2->SetFileName("composed-Resampled.nrrd");
-  caster2->SetInput(resample3->GetOutput());
-  writer2->SetInput(caster2->GetOutput());
+  writerDefComp->SetFileName("composedTransformResampled.nrrd");
+  casterDefComp->SetInput(resampleDefComp->GetOutput());
+  writerDefComp->SetInput(casterDefComp->GetOutput());
 
   try
   {
-    writer2->Update();
+    writerDefComp->Update();
   }
   catch (itk::ExceptionObject & err)
   {
@@ -642,65 +647,8 @@ int main(int argc, char * argv[])
     std::cerr << err << std::endl;
     return EXIT_FAILURE;
   }
+  std::cout<<"Deformable Stage Image output resampled by CompositTransform!"<<std::endl;
 
-  // Add time and memory probes
-  /*
-  using DifferenceFilterType =
-    itk::SquaredDifferenceImageFilter<FixedImageType, FixedImageType, OutputImageType>;
-
-  DifferenceFilterType::Pointer difference = DifferenceFilterType::New();
-
-  WriterType::Pointer writer2 = WriterType::New();
-  writer2->SetInput(difference->GetOutput());
-
-
-  // Compute the difference image between the
-  // fixed and resampled moving image.
-  if (argc > 4)
-  {
-    difference->SetInput1(fixedImageReader->GetOutput());
-    difference->SetInput2(resample->GetOutput());
-    writer2->SetFileName(argv[4]);
-    try
-    {
-      writer2->Update();
-    }
-    catch (itk::ExceptionObject & err)
-    {
-      std::cerr << "ExceptionObject caught !" << std::endl;
-      std::cerr << err << std::endl;
-      return EXIT_FAILURE;
-    }
-  }
-
-
-  // Compute the difference image between the
-  // fixed and moving image before registration.
-  if (argc > 5)
-  {
-    writer2->SetFileName(argv[5]);
-    difference->SetInput1(fixedImageReader->GetOutput());
-    difference->SetInput2(movingImageReader->GetOutput());
-    try
-    {
-      writer2->Update();
-    }
-    catch (itk::ExceptionObject & err)
-    {
-      std::cerr << "ExceptionObject caught !" << std::endl;
-      std::cerr << err << std::endl;
-      return EXIT_FAILURE;
-    }
-  using ResampleFilterType = itk::ResampleImageFilter<MovingImageType, FixedImageType>;
-  }
-  */
-
-  // Generate the explicit deformation field resulting from
-  // the registration.
-  //if (argc > 6)
-  //{
-
-  std::cout<<"Saving Deformation Vector Field!"<<std::endl;
 
     using VectorPixelType = itk::Vector<float, ImageDimension>;
     using DisplacementFieldImageType = itk::Image<VectorPixelType, ImageDimension>;
@@ -742,6 +690,7 @@ int main(int argc, char * argv[])
       std::cerr << excp << std::endl;
       return EXIT_FAILURE;
     }
+  std::cout<<"Deformation Vector Field Saved!"<<std::endl;
 
   // Optionally, save the transform parameters in a file
   if (argc > 7)
