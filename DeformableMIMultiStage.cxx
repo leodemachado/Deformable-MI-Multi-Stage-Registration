@@ -171,7 +171,7 @@ public:
 
 int main(int argc, char * argv[])
 {
-  if (argc < 4)
+  if (argc < 3)
   {
     std::cerr << "Missing Parameters " << std::endl;
     std::cerr << "Usage: " << argv[0];
@@ -369,7 +369,7 @@ int main(int argc, char * argv[])
   }
 
   // Add the final rigid transform into the composit transform stack
-  compositeTransform->AddTransform(rregistration->GetModifiableTransform());
+  compositeTransform->AddTransform(rinitialTransform);
 
   WriterType::Pointer writerRigid = WriterType::New();
   CastFilterType::Pointer casterRigid = CastFilterType::New();
@@ -588,7 +588,7 @@ int main(int argc, char * argv[])
 
   std::cout<<"Deformable stage concluded!"<<std::endl;
 
-  compositeTransform->AddTransform(dregistration->GetModifiableTransform());
+  compositeTransform->AddTransform(dtransform);
 
 
   WriterType::Pointer     writerDef = WriterType::New();
